@@ -40,9 +40,8 @@ contract Validator is Ownable, usingProvable {
     mapping (bytes32 => uint256) public provableOracleRequests;  // provableOracleRequests ID => requestId
 
     uint256 public customGasPrice;
-    event LogMsg(string description);
-    event CompanyOracle(uint256 requestId, uint256 balance);
-    
+    uint256 public gasLimit = 80000;
+
     constructor () public {
         requests.push();    // request ID starts from 1. ID = 0 means completed/empty
     }
@@ -76,7 +75,6 @@ contract Validator is Ownable, usingProvable {
         uint256 r_id = companyOracleRequests[requestId];
         require(r_id != 0, "Wrong requestId");
         companyOracleRequests[requestId] = 0;   // requestId fulfilled
-        CompanyOracle(requestId, balance);
         _oracleResponse(r_id, balance);
         return true;
     }
@@ -101,6 +99,12 @@ contract Validator is Ownable, usingProvable {
         provable_setCustomGasPrice(amount);
         return true;
     }
+
+    function setGasLimit(uint amount) external returns (bool) {
+        require(isAllowedAddress[msg.sender],"ERR_ALLOWED_ADDRESS_ONLY");
+        gasLimit = amount;
+        return true;
+    }
     
     function withdraw(uint amount) external returns (bool) {
         require(isAllowedAddress[msg.sender],"ERR_ALLOWED_ADDRESS_ONLY");
@@ -115,13 +119,8 @@ contract Validator is Ownable, usingProvable {
         uint256 r_id = provableOracleRequests[myid];
         require(r_id != 0, "Wrong requestId");
         provableOracleRequests[myid] = 0;   // requestId fulfilled
-        LogMsg(result);
         uint256 balance = parseInt(result);
         _oracleResponse(r_id, balance);
-    }
-
-    function provable_request(uint256 requestId, uint256 network, address tokenForeign, address user) payable external {
-        _provable_request(requestId, network, tokenForeign, user);
     }
 
     function _provable_request(uint256 requestId, uint256 network, address tokenForeign, address user) internal {
@@ -130,8 +129,7 @@ contract Validator is Ownable, usingProvable {
         string memory b = "&address=0x";
         string memory c = "&tag=latest).result";
         string memory s = strConcat(a,_address2hex(tokenForeign),b,_address2hex(user),c);
-        LogMsg(s);
-        bytes32 myid = provable_query("URL", s);
+        bytes32 myid = provable_query("URL", s, gasLimit);
         provableOracleRequests[myid] = requestId;
     }
 
