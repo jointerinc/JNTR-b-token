@@ -52,6 +52,14 @@ contract GatewayBsc is Ownable {
     event Swap(address indexed user, uint256 amount);
     event SwapB(address indexed user, uint256 amount);
     event Claim(address indexed user, uint256 amount, uint256 indexed tokenNative);
+    
+    /**
+    * @dev Throws if called by any account other than the system.
+    */
+    modifier onlySystem() {
+        require(msg.sender == system, "Caller is not the system");
+        _;
+    }
 
     constructor (
         address _token,     // JNTR token contract
@@ -69,14 +77,12 @@ contract GatewayBsc is Ownable {
         system = _system;
     }
 
-    function setFee(uint256 _fee) external returns(bool) {
-        require (system == msg.sender, "Not system");
+    function setFee(uint256 _fee) external onlySystem returns(bool) {
         fee = _fee;
         return true;
     }
 
-    function setClaimFee(uint256 _fee) external returns(bool) {
-        require (system == msg.sender, "Not system");
+    function setClaimFee(uint256 _fee) external onlySystem returns(bool) {
         claimFee = _fee;
         return true;
     }
@@ -135,13 +141,13 @@ contract GatewayBsc is Ownable {
         return true;
     }
 
-    function claimTokenBehalf(address user) external returns (bool) {
+    function claimTokenBehalf(address user) external onlySystem returns (bool) {
         uint256 id = IValidator(validator).checkBalance(chain, foreignGateway, user);
         orders[id] = 1; //JNTR
         return true;
     }
 
-    function claimTokenBBehalf(address user) external returns (bool) {
+    function claimTokenBBehalf(address user) external onlySystem returns (bool) {
         uint256 id = IValidator(validator).checkBalance(chain, foreignGateway, user);
         orders[id] = 2; //JNTR/b
         return true;

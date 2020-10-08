@@ -35,20 +35,26 @@ contract GatewayEth is Ownable {
     event Swap(address indexed user, uint256 amount);
     event Claim(address indexed user, uint256 amount);
 
+    /**
+    * @dev Throws if called by any account other than the system.
+    */
+    modifier onlySystem() {
+        require(msg.sender == system, "Caller is not the system");
+        _;
+    }
+
     constructor (address _token, string memory _name, address _system) public {
         token = IBEP20(_token);
         name = _name;
         system = _system;
     }
 
-    function setFee(uint256 _fee) external returns(bool) {
-        require (system == msg.sender, "Not system");
+    function setFee(uint256 _fee) external onlySystem returns(bool) {
         fee = _fee;
         return true;
     }
 
-    function setClaimFee(uint256 _fee) external returns(bool) {
-        require (system == msg.sender, "Not system");
+    function setClaimFee(uint256 _fee) external onlySystem returns(bool) {
         claimFee = _fee;
         return true;
     }
@@ -84,7 +90,7 @@ contract GatewayEth is Ownable {
         return true;
     }
 
-    function claimTokenBehalf(address user) external returns (bool) {
+    function claimTokenBehalf(address user) external onlySystem returns (bool) {
         IValidator(validator).checkBalance(chain, foreignGateway, user);
         return true;
     }
