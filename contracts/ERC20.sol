@@ -334,7 +334,7 @@ contract Ownable is Context {
 contract ERC20Token is Context, IERC20, Ownable {
   using SafeMath for uint256;
 
-  address public gateway;
+  mapping(address => bool) public gateways; // different gateways will be used for different pairs (chains)
   address public airdrop_maker;
   uint256 public unlock_amount;
   
@@ -348,12 +348,13 @@ contract ERC20Token is Context, IERC20, Ownable {
   string private _symbol;
   string private _name;
 
+  event ChangeGateway(address gateway, bool active);
 
   /**
    * @dev Throws if called by any account other than the gateway.
    */
   modifier onlyGateway() {
-    require(gateway == _msgSender(), "Caller is not the gateway");
+    require(gateways[_msgSender()], "Caller is not the gateway");
     _;
   }
 
@@ -364,8 +365,9 @@ contract ERC20Token is Context, IERC20, Ownable {
     _totalSupply = 0;
   }
 
-  function setGateway(address _gateway) external onlyOwner returns(bool) {
-    gateway = _gateway;
+  function changeGateway(address gateway, bool active) external onlyOwner returns(bool) {
+    gateways[gateway] = active;
+    emit ChangeGateway(gateway, active);
     return true;
   }
 
