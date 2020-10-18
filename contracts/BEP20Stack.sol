@@ -351,8 +351,8 @@ contract BEP20Token is Context, IBEP20, Ownable {
 
     uint256 constant NOMINATOR = 10**18;     // rate nominator
     uint256 constant NUMBER_OF_BLOCKS = 10512000;  // number of blocks per year (1 block = 3 sec)
-    mapping (address => uint256) private startBlock;
-    mapping(address => bool) public excludeReward;
+    mapping (address => uint256) public startBlock;
+    mapping (address => bool) public excludeReward;
     uint256 public currentRate;    // percent per year, without decimals
     uint256 public rewardRate; // % per block (18 decimals)
     uint256 public lastBlock = block.number;
@@ -384,6 +384,8 @@ contract BEP20Token is Context, IBEP20, Ownable {
     _decimals = 18;
     _totalSupply = 0;
     excludeReward[address(1)] = true;   // address(1) is a reward pool
+    currentRate = 10;
+    rewardRate = currentRate * NOMINATOR / (NUMBER_OF_BLOCKS * 100);
     emit ExcludeReward(address(1), true);
   }
 
@@ -396,9 +398,20 @@ contract BEP20Token is Context, IBEP20, Ownable {
         return true;
     }
 
-    function setExcludeReward(address addr, bool status) external onlyOwner returns(bool) {
-        excludeReward[addr] = status;
-        emit ExcludeReward(addr, status);
+    function setExcludeReward(address account, bool status) external onlyOwner returns(bool) {
+        new_block();
+        if (excludeReward[account] != status) {
+            if (status) {
+                _addReward(account);
+                totalStakingAmount = totalStakingAmount.sub(_balances[account]);                
+            }
+            else {
+                startBlock[account] = block.number;
+                totalStakingAmount = totalStakingAmount.add(_balances[account]);                
+            }
+            excludeReward[account] = status;
+            emit ExcludeReward(account, status);
+        }
         return true;
     }
 
@@ -442,19 +455,25 @@ contract BEP20Token is Context, IBEP20, Ownable {
     }
 
     function _addReward(address account) internal {
-        uint256 _stakingRewardPool = stakingRewardPool;
+        if (excludeReward[account]) return;
         uint256 _balance = _balances[account];
-        if (_stakingRewardPool == 0 || _balance == 0 || excludeReward[account]) return;
+        if (_balance == 0) {
+            startBlock[account] = block.number;
+            return;
+        }
+        uint256 _stakingRewardPool = stakingRewardPool;
+        //if (_stakingRewardPool == 0) return;
 
         uint256 _totalStakingWeight = totalStakingWeight;
         uint256 _stakerWeight = (block.number.sub(startBlock[account])).mul(_balance); //Staker weight.
         uint256 reward = _stakingRewardPool.mul(_stakerWeight).div(_totalStakingWeight);
+        totalStakingWeight = _totalStakingWeight.sub(_stakerWeight);
+        startBlock[account] = block.number;
 
         if (reward == 0) return;
-        startBlock[account] = block.number;
         _balances[account] = _balance.add(reward);
         totalStakingAmount = totalStakingAmount.add(reward);
-        totalStakingWeight = _totalStakingWeight.sub(_stakerWeight);
+        stakingRewardPool = _stakingRewardPool.sub(reward);
     }
 
   /**
