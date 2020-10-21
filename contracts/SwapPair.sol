@@ -4,9 +4,6 @@ pragma solidity =0.6.12;
 import "./SafeMath.sol";
 import "./Ownable.sol";
 
-// TODO: Decimals correction
-// TODO: balance + 1, to avoid Zero balance
-
 interface ISwapFactory {
     function newFactory() external view returns(address);
 }

@@ -5,9 +5,6 @@ pragma solidity =0.6.12;
 //import "./Ownable.sol";
 import "./SwapPair.sol";
 
-// TODO: request prices for tokens (provide tokenA and tokenB)
-
-
 
 interface IValidator {
     // returns: user balance, native (foreign for us) encoded balance, foreign (native for us) encoded balance
@@ -175,8 +172,10 @@ contract SwapJNTRFactory is Ownable {
 
         if (canMint[tokenA])
             IBEP20(tokenA).burnFrom(msg.sender, amount);
-        else
+        else {
+            require(gatewayVault != address(0), "No vault address");
             IBEP20(tokenA).transferFrom(msg.sender, gatewayVault, amount);
+        }
 
         if (pair == address(1)) { //local pair
             if (canMint[tokenB])

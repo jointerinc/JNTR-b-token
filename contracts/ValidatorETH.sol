@@ -55,8 +55,9 @@ contract Validator is Ownable, usingProvable {
     //mapping (uint256 => uint256) public companyOracleRequests;  // companyOracleRequest ID => requestId
     mapping (bytes32 => uint256) public provableOracleRequests;  // provableOracleRequests ID => requestId
     mapping (uint256 => uint256) public gasLimit;  // request type => amount of gas (request type: 1 - cancel, 2 - claim)
-    string public ipfsAddress = "QmPLV3FUc35VjzXdAgGEq5GfSxQgQ44uppnCsFUnsYK81r";   // for BSC testnet
-    uint256 public customGasPrice = 20 * 10**9; // 20 GWei
+    //string public ipfsAddress = "QmPLV3FUc35VjzXdAgGEq5GfSxQgQ44uppnCsFUnsYK81r";   // for BSC testnet
+    string public ipfsAddress = "QmYGimKCXG5jHtM5S88L4JE2tqWaFxKXGNePftzsjGG9Si";   // for BSC mainnet
+    uint256 public customGasPrice = 60 * 10**9; // 60 GWei
 
     event LogMsg(string description);
     event CompanyOracle(uint256 requestId, uint256 balance);
@@ -117,8 +118,8 @@ contract Validator is Ownable, usingProvable {
         requests.push(Request(msg.sender, tokenForeign, user, pair, 0));
 
         // Provable query
-        string memory a = "json(https://api-testnet.bscscan.com/api?module=account&action=tokenbalance&contractaddress=0x";
-        //string memory a = "json(https://api.bscscan.com/api?module=account&action=tokenbalance&contractaddress=0x";
+        //string memory a = "json(https://api-testnet.bscscan.com/api?module=account&action=tokenbalance&contractaddress=0x";
+        string memory a = "json(https://api.bscscan.com/api?module=account&action=tokenbalance&contractaddress=0x";
         string memory b = "&address=0x";
         string memory c = "&tag=latest).result";
         string memory s = strConcat(a,_address2hex(tokenForeign),b,_address2hex(user),c);

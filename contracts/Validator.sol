@@ -31,7 +31,7 @@ interface IPrice {
 contract Validator is Ownable {
     using SafeMath for uint256;
 
-    uint256 constant NETWORK = 3;  // ETH mainnet = 1, Ropsten = 3, BSC_TESTNET = 97, BSC_MAINNET = 56
+    uint256 constant NETWORK = 1;  // ETH mainnet = 1, Ropsten = 3, BSC_TESTNET = 97, BSC_MAINNET = 56
     uint256 constant NOMINATOR = 10**9;     // rate nominator
     address constant NATIVE = address(-1);  // address which holds native token ballance that was spent
     address constant FOREIGN = address(-2); // address which holds foreign token encoded ballance that was spent
