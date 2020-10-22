@@ -14,7 +14,7 @@ interface IBEP20 {
 contract Airdrop is Ownable {
     uint256 public dropAmount = 100 ether; // tokens amount
     address public signer;
-    mapping (address => mapping(address => bool)) isReceived; // token => user => isReceived
+    mapping (address => mapping(address => bool)) public isReceived; // token => user => isReceived
     event SetSigner(address signer);
     event SetDropAmount(uint256 dropAmount);
 
