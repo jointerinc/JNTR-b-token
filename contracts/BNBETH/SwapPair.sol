@@ -10,7 +10,12 @@ import "./TransferHelper.sol";
 
 interface ISwapFactory {
     function newFactory() external view returns(address);
+    function auction() external view returns(address);
     function validator() external view returns(address);
+}
+
+interface IAuction {
+    function contributeWithEtherBehalf(address payable _whom) external payable returns (bool);
 }
 
 contract SwapPair {
@@ -18,12 +23,13 @@ contract SwapPair {
 
     //uint256 constant chain = 97;  // ETH mainnet = 1, Ropsten = 2, BSC_TESTNET = 97, BSC_MAINNET = 56
     uint256 constant MAX_AMOUNT = 2**192;
+    uint256 constant INVESTMENT_FLAG = 2**224;
     uint256 constant NOMINATOR = 10**9;     // rate nominator
     address constant NATIVE = address(-1);  // address which holds native token ballance that was spent
     address constant FOREIGN = address(-2); // address which holds foreign token encoded ballance that was spent
     address constant NATIVE_COINS = 0x0000000000000000000000000000000000000009; // 0 - BNB, 1 - ETH, 2 - BTC
 
-
+    address public auction;             // auction address
     address public token;               // token address
     address public tokenForeign;        // Foreign token address
     address public foreignSwapPair;     // foreign SwapPair contract address (on other blockchain)
@@ -63,6 +69,7 @@ contract SwapPair {
 
     function update() public returns(bool) {
         factory = ISwapFactory(factory).newFactory();
+        auction = ISwapFactory(factory).auction();
         return true;
     }
 
@@ -89,6 +96,10 @@ contract SwapPair {
     function _swapAddress(address user) internal pure returns(address swapAddress) {
         swapAddress = address(uint160(user)+1);
     }
+    // 3. balanceOf[user-1] - investment to auction total balance.
+    function _investAddress(address user) internal pure returns(address investAddress) {
+        investAddress = address(uint160(user)-1);
+    }
 
     // call appropriate transfer function
     function _transfer(address to, uint value) internal {
@@ -99,34 +110,55 @@ contract SwapPair {
     }
 
     // user's deposit to the pool, waiting for swap
-    function deposit(address user, uint256 amount) external onlyFactory returns(bool) {
-        balanceOf[user] = balanceOf[user].add(amount);
+    function deposit(address user, uint256 amount, bool isInvestment) external onlyFactory returns(bool) {
+        if (isInvestment) {
+            address investAddress = _investAddress(user);   // on Ethereum side only
+            balanceOf[investAddress] = (balanceOf[investAddress].add(amount)) | INVESTMENT_FLAG;
+        }
+        else {
+            balanceOf[user] = balanceOf[user].add(amount);
+        }
         totalSupply = totalSupply.add(amount);
         return true;
     }
 
     // cancel swap order request
-    function cancel(address user, uint256 amount) external onlyFactory returns(bool) {
-        balanceOf[user] = balanceOf[user].sub(amount,"Not enough tokens on the balance");
+    function cancel(address user, uint256 amount, bool isInvestment) external onlyFactory returns(bool) {
+        if (isInvestment) {
+            address investAddress = _investAddress(user);   // on Ethereum side only
+            uint256 balance = uint192(balanceOf[investAddress]);
+            balance = balance.sub(amount,"Not enough tokens on the balance");
+            balanceOf[investAddress] = balance | INVESTMENT_FLAG;
+        }
+        else {
+            balanceOf[user] = balanceOf[user].sub(amount,"Not enough tokens on the balance");
+        }
         totalSupply = totalSupply.sub(amount,"Not enough Total Supply");
         return true;
     }
     // approve cancel swap order and withdraw token from pool or discard cancel request
-    function cancelApprove(address user, uint256 amount, bool approve) external onlyFactory returns(address, address) {
+    // if isInvestment then user = investAddress (user - 1)
+    function cancelApprove(address user, uint256 amount, bool approve, bool isInvestment) external onlyFactory returns(address, address) {
         if (approve) {    //approve cancel
             _transfer(user, amount);
         }
         else {  // discard cancel request.
+            if (isInvestment)
+                user = _investAddress(user);   // on Ethereum side only
             balanceOf[user] = balanceOf[user].add(amount);
             totalSupply = totalSupply.add(amount);
         }
         return (token, tokenForeign);
     }
-    
+
     // request to claim token after swap
-    function claim(address user, uint256 amount) external onlyFactory returns(bool) {
-        address userSwap = _swapAddress(user);
-        balanceOf[userSwap] = balanceOf[userSwap].add(amount);
+    function claim(address user, uint256 amount, bool isInvestment) external onlyFactory returns(bool) {
+        address userBalance;
+        if (isInvestment)
+            userBalance = _investAddress(user); // on BSC side only
+        else
+            userBalance = _swapAddress(user);
+        balanceOf[userBalance] = balanceOf[userBalance].add(amount);
         return true;
     }
 
@@ -137,16 +169,27 @@ contract SwapPair {
             uint256 nativeEncoded,
             uint256 foreignSpent,
             uint256 rate,
-            bool approve
+            bool approve,
+            bool isInvestment
         ) external onlyFactory returns(address, address, uint256 nativeAmount, uint256 rest) {
-        address userSwap = _swapAddress(user);
+        address userSwap;
+        if (isInvestment) {   //claim investment only on BSC side
+            userSwap = _investAddress(user);    // invest address (real user address - 1)
+        }
+        else {
+            userSwap = _swapAddress(user);  // swap address = real user address + 1
+        }
+
         if(approve) { // approve claim
             (nativeAmount, rest) = calculateAmount(amount,nativeEncoded,foreignSpent,rate);
             if (rest != 0) {
                 balanceOf[userSwap] = balanceOf[userSwap].sub(rest);    // not all amount swapped
             }
             totalSupply = totalSupply.sub(nativeAmount,"Not enough Total Supply");
-            _transfer(user, nativeAmount);
+            if (isInvestment)
+                IAuction(auction).contributeWithEtherBehalf.value(nativeAmount)(payable(user));
+            else
+                _transfer(user, nativeAmount);
         }
         else {  // discard claim
             balanceOf[userSwap] = balanceOf[userSwap].sub(amount);
