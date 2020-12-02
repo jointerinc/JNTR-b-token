@@ -282,7 +282,12 @@ contract SendBonusETH is Staking {
         while (len > 0) {
             len--;
             if(options[token][len].amountETH == amount) {
-                stake(token, len, user, options[token][len].amountToken);
+                if(options[token][len].period == 0) {
+                    safeTransfer(token, user, options[token][len].amountToken);
+                }
+                else {
+                    stake(token, len, user, options[token][len].amountToken);
+                }
                 return true;
             }
         }
