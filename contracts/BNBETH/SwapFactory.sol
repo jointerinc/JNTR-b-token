@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: No License (None)
 pragma solidity ^0.6.9;
 
-//mport "./SafeMath.sol";
+//import "./SafeMath.sol";
 //import "./Ownable.sol";
 import "./SwapPair.sol";
-
-// TODO: request prices for tokens (provide tokenA and tokenB)
 
 interface IERC20 {
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
@@ -21,11 +19,20 @@ interface IValidator {
     function getOracleFee(uint256 req) external returns(uint256);  //req: 1 - cancel, 2 - claim, returns: value
 }
 
+interface ISmart {
+    function requestCompensation(address user, uint256 feeAmount) external returns(bool);
+}
+
+interface IAuction {
+    function contributeFromSmartSwap(address payable _whom) external payable returns (bool);
+}
+
 contract SwapFactory is Ownable {
     using SafeMath for uint256;
 
-    address constant NATIVE_COINS = 0x0000000000000000000000000000000000000009; // 0 - BNB, 1 - ETH, 2 - BTC
+    address constant NATIVE_COINS = 0x0000000000000000000000000000000000000009; // 1 - BNB, 2 - ETH, 3 - BTC
     uint256 constant INVESTMENT_FLAG = 2**224;
+    uint256 constant FEE_DENOMINATOR = 10000;   // fee in percentage with 2 decimals
 
     mapping(address => mapping(address => address payable)) public getPair;
     mapping(address => address) public foreignPair;
@@ -35,10 +42,19 @@ contract SwapFactory is Ownable {
     mapping(address => mapping(address => uint256)) public cancelAmount;    // pair => user => cancelAmount
     mapping(address => mapping(address => uint256)) public swapAmount;    // pair => user => swapAmount
 
-    uint256 public fee;
+    mapping(address => bool) public isExchange;         // is Exchange address
+    mapping(address => bool) public isExcludedSender;   // address excluded from receiving SMART token as fee compensation
+
+    
+    uint256 public processingFee; // the fee in base coin, to compensate Gas when back-end call claimTokenBehalf()
+    uint256 public companyFee = 30; // the fee (in percent wih 2 decimals) that received by company. 30 - means 0.3%
+    mapping (address => uint256) affiliateFee;  // the affiliate may set personal fee (in percent wih 2 decimals). It have to compensate this fee with own tokens.
+    mapping (address => address) affiliateCompensator;    // affiliate contract which will compensate fee with tokens
     address payable public validator;
-    address public system;  // system address mey change fee amount
+    mapping(address => bool) isSystem;  // system address mey change fee amount
     address public auction; // auction address
+    address public contractSmart;  // the contract address to request Smart token in exchange of fee
+    address public feeReceiver; // address which receive the fee (by default is validator)
     
 
     address public newFactory;            // new factory address to upgrade
@@ -48,37 +64,60 @@ contract SwapFactory is Ownable {
     event CancelApprove(address indexed tokenA, address indexed tokenB, address indexed user, uint256 amountA, bool isInvestment);
     event ClaimRequest(address indexed tokenA, address indexed tokenB, address indexed user, uint256 amountB, bool isInvestment);
     event ClaimApprove(address indexed tokenA, address indexed tokenB, address indexed user, uint256 amountB, uint256 amountA, bool isInvestment);
-
+    event ExchangeInvestETH(address indexed exchange, address indexed whom, uint256 value);
+    event SetSystem(address indexed system, bool active);
+    event SetAffiliate(address indexed system, address indexed compensator);
+    
     /**
     * @dev Throws if called by any account other than the system.
     */
     modifier onlySystem() {
-        require(msg.sender == system, "Caller is not the system");
+        require(isSystem[msg.sender] || isOwner(), "Caller is not the system");
         _;
     }
 
     constructor (address _system) public {
-        system = _system;
+        isSystem[_system] = true;
         newFactory = address(this);
+        emit SetSystem(_system, true);
     }
-
+    
+    //invest into auction
+    function investAuction(address payable _whom) external payable returns (bool)
+    {
+        require(foreignPair[msg.sender] != address(0), "Investing allowed from pair only");
+        IAuction(auction).contributeFromSmartSwap{value: msg.value}(_whom);
+    }
+    
     function setFee(uint256 _fee) external onlySystem returns(bool) {
-        fee = _fee;
+        processingFee = _fee;
         return true;
     }
 
-    function setSystem(address _system) external onlyOwner returns(bool) {
-        system = _system;
+    function setSystem(address _system, bool _active) external onlyOwner returns(bool) {
+        isSystem[_system] = _active;
+        emit SetSystem(_system, _active);
         return true;
     }
 
     function setValidator(address payable _validator) external onlyOwner returns(bool) {
         validator = _validator;
+        if(feeReceiver == address(0)) feeReceiver = _validator;
         return true;
     }
 
     function setForeignFactory(address _addr) external onlyOwner returns(bool) {
         foreignFactory = _addr;
+        return true;
+    }
+
+    function setFeeReceiver(address _addr) external onlyOwner returns(bool) {
+        feeReceiver = _addr;
+        return true;
+    }
+
+    function setMSSContract(address _addr) external onlyOwner returns(bool) {
+        contractSmart = _addr;
         return true;
     }
 
@@ -92,7 +131,34 @@ contract SwapFactory is Ownable {
         return true;
     }
 
-    function createPair(address tokenA, uint8 decimalsA, address tokenB, uint8 decimalsB) public onlyOwner returns (address payable pair) {
+    // set affiliate compensator contract address, if this address is address(0) - remove affiliate.
+    // compensator contract has to compensate the fee by other tokens.
+    function setAffiliate(address _affiliate, address _compensator) external onlyOwner returns(bool) {
+        affiliateCompensator[_affiliate] = _compensator;
+        emit SetAffiliate(_affiliate, _compensator);
+        return true;
+    }
+
+    // set affiliate fee in percent with 2 decimals. I.e. 10 = 0.1%
+    function setAffiliateFee(uint256 _fee) external returns(bool) {
+        require(affiliateCompensator[msg.sender] != address(0), "Affiliate is not registered");
+        require(_fee < 10000, "too big fee");    // fee should be less then 100%
+        affiliateFee[msg.sender] = _fee;
+        return true;
+    }
+
+    // for ETH side only
+    function changeExchangeAddress(address _which,bool _bool) external onlyOwner returns(bool){
+        isExchange[_which] = _bool;
+        return true;
+    }
+    
+    function changeExcludedAddress(address _which,bool _bool) external onlyOwner returns(bool){
+        isExcludedSender[_which] = _bool;
+        return true;
+    }
+    
+    function createPair(address tokenA, uint8 decimalsA, address tokenB, uint8 decimalsB) public onlySystem returns (address payable pair) {
         require(getPair[tokenA][tokenB] == address(0), 'PAIR_EXISTS'); // single check is sufficient
         bytes memory bytecode = type(SwapPair).creationCode;
         bytes32 salt = keccak256(abi.encodePacked(tokenA, tokenB));
@@ -112,7 +178,7 @@ contract SwapFactory is Ownable {
                 hex'ff',
                 foreignFactory,
                 keccak256(abi.encodePacked(tokenA, tokenB)),
-                hex'93cdfaff21ec670a1ecae824881b508d73c4aaaf0d2be40fd90d52adcef8cc96' // init code hash
+                hex'05a14d15386c927ac1a2b1e515003107665e36f549246b88b3d136d36426eded' // init code hash
             ))));
     }
 
@@ -136,7 +202,7 @@ contract SwapFactory is Ownable {
                 hex'ff',
                 address(this),
                 keccak256(abi.encodePacked(tokenA, tokenB)),
-                bytecodeHash    // hex'96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f' // init code hash
+                bytecodeHash    // hex'05a14d15386c927ac1a2b1e515003107665e36f549246b88b3d136d36426eded' // init code hash
             ))));
     }
 
@@ -144,15 +210,27 @@ contract SwapFactory is Ownable {
 
     //user should approve tokens transfer before calling this function.
     function swapInvestment(address tokenA, uint256 amount) external payable returns (bool) {
-        address tokenB = address(0);    // BNB (native coin)
-        return _swap(tokenA, tokenB, amount, true);
+        address tokenB = address(1);    // BNB (foreign coin)
+        transferFee(tokenA, amount, msg.sender, address(0));    // no affiliate
+        return _swap(tokenA, tokenB, msg.sender, amount, true);
     }
 
     function cancelInvestment(address tokenA, uint256 amount) external payable returns (bool) {
-        address tokenB = address(0);    // BNB (native coin)
-        return _cancel(tokenA, tokenB, amount, true);
+        address tokenB = address(1);    // BNB (foreign coin)
+        return _cancel(tokenA, tokenB, msg.sender, amount, true);
     }
 
+
+    // function for invest ETH from from exchange on user behalf
+    function contributeWithEtherBehalf(address payable _whom) external payable returns (bool) {
+        require(isExchange[msg.sender], "Not an Exchange address");
+        address tokenA = address(2);    // ETH (native coin)
+        address tokenB = address(1);    // BNB (foreign coin)
+        uint256 amount = msg.value - processingFee;
+        emit ExchangeInvestETH(msg.sender, _whom, msg.value);
+        transferFee(tokenA, amount, _whom, address(0));    // no affiliate
+        return _swap(tokenA, tokenB, _whom, amount, true);
+    }
     // ================= end Ethereum part =================================================================================
 
     // ====================== on BSC side only =============================================================================
@@ -160,7 +238,7 @@ contract SwapFactory is Ownable {
     // tokenB - foreign token address or address(1) for ETH
     // amountB - amount of foreign tokens or ETH
     function claimInvestmentBehalf(address tokenB, address user, uint256 amountB) external onlySystem returns (bool) {
-        address tokenA = address(0);    // BNB (native coin)
+        address tokenA = address(1);    // BNB (native coin)
         return _claimTokenBehalf(tokenA, tokenB, user, amountB, true);
     }
     // ====================== end BSC part =================================================================================
@@ -168,58 +246,91 @@ contract SwapFactory is Ownable {
     
     //user should approve tokens transfer before calling this function.
     function swap(address tokenA, address tokenB, uint256 amount) external payable returns (bool) {
-        return _swap(tokenA, tokenB, amount, false);
+        transferFee(tokenA, amount, msg.sender, address(0));    // no affiliate
+        return _swap(tokenA, tokenB, msg.sender, amount, false);
+    }
+
+    //Swap from affiliate site. User should approve tokens transfer before calling this function.
+    function swap(address tokenA, address tokenB, uint256 amount, address affiliate) external payable returns (bool) {
+        require(affiliateCompensator[affiliate] != address(0), "Affiliate is not registered");
+        transferFee(tokenA, amount, msg.sender, affiliate);
+        return _swap(tokenA, tokenB, msg.sender, amount, false);
     }
 
     function cancel(address tokenA, address tokenB, uint256 amount) external payable returns (bool) {
-        return _cancel(tokenA, tokenB, amount, false);
+        return _cancel(tokenA, tokenB, msg.sender, amount, false);
     }
     function claimTokenBehalf(address tokenA, address tokenB, address user, uint256 amountB) external onlySystem returns (bool) {
         return _claimTokenBehalf(tokenA, tokenB, user, amountB, false);
     }
 
-    //user should approve tokens transfer before calling this function.
-    function _swap(address tokenA, address tokenB, uint256 amount, bool isInvestment) internal returns (bool) {
+    // transfer fee to receiver and request MASS token as compensation.
+    // tokenA - token that user send
+    // amount - amount of tokens that user send
+    // user - address of user
+    function transferFee(address tokenA, uint256 amount, address user, address affiliate) internal {
         uint256 feeAmount = msg.value;
-        if (tokenA < NATIVE_COINS) feeAmount = feeAmount.sub(amount);   // if native coin, then feeAmount = msg.value - swap amount
-        require(feeAmount >= fee,"Insufficient fee");
+        if (tokenA < NATIVE_COINS) feeAmount = feeAmount.sub(amount,"Insuficiant value");   // if native coin, then feeAmount = msg.value - swap amount
+        require(feeAmount >= processingFee,"Insufficient fee");
+        uint256 otherFee = feeAmount - processingFee;
+        uint256 affiliateFeeAmount;
+        uint256 affiliateFeeRate = affiliateFee[affiliate];
+        if (affiliateFeeRate != 0 && otherFee != 0) {
+            affiliateFeeAmount = (otherFee * affiliateFeeRate)/(affiliateFeeRate + companyFee);
+            feeAmount -= affiliateFeeAmount;
+        }
+
+        if (affiliateFeeAmount != 0) {
+            TransferHelper.safeTransferETH(affiliate, affiliateFeeAmount);
+            ISmart(affiliateCompensator[affiliate]).requestCompensation(user, affiliateFeeAmount);
+        }
+
+        TransferHelper.safeTransferETH(feeReceiver, feeAmount);
+        if(contractSmart != address(0) && !isExcludedSender[msg.sender]) {
+            ISmart(contractSmart).requestCompensation(user, feeAmount);
+        }
+    }
+    
+
+    //user should approve tokens transfer before calling this function.
+    function _swap(address tokenA, address tokenB, address user, uint256 amount, bool isInvestment) internal returns (bool) {
         require(amount != 0, "Zero amount");
         address payable pair = getPair[tokenA][tokenB];
         require(pair != address(0), 'PAIR_NOT_EXISTS');
-        
-        // transfer fee to validator. May be changed to request tokens for compensation
-        validator.transfer(feeAmount);
 
         if (tokenA < NATIVE_COINS)
             TransferHelper.safeTransferETH(pair, amount);
         else 
-            TransferHelper.safeTransferFrom(tokenA, msg.sender, pair, amount);
-        SwapPair(pair).deposit(msg.sender, amount, isInvestment);
-        emit SwapRequest(tokenA, tokenB, msg.sender, amount, isInvestment);
+            TransferHelper.safeTransferFrom(tokenA, user, pair, amount);
+        SwapPair(pair).deposit(user, amount, isInvestment);
+        emit SwapRequest(tokenA, tokenB, user, amount, isInvestment);
         return true;
     }
 
-    function _cancel(address tokenA, address tokenB, uint256 amount, bool isInvestment) internal returns (bool) {
+    function _cancel(address tokenA, address tokenB, address user, uint256 amount, bool isInvestment) internal returns (bool) {
         require(msg.value >= IValidator(validator).getOracleFee(1), "Insufficient fee");    // check oracle fee for Cancel request
         require(amount != 0, "Zero amount");
         address payable pair = getPair[tokenA][tokenB];
         require(pair != address(0), 'PAIR_NOT_EXISTS');
-        if (cancelAmount[pair][msg.sender] == 0) {  // new cancel request
-            cancelAmount[pair][msg.sender] = amount;
-            SwapPair(pair).cancel(msg.sender, amount, isInvestment);
+        if (cancelAmount[pair][user] == 0) {  // new cancel request
+            cancelAmount[pair][user] = amount;
+            SwapPair(pair).cancel(user, amount, isInvestment);
         }
         else { // repeat cancel request in case oracle issues.
-            amount = cancelAmount[pair][msg.sender];
+            amount = cancelAmount[pair][user];
         }
 
         // transfer fee to validator. May be changed to request tokens for compensation
-        validator.transfer(msg.value);
+        TransferHelper.safeTransferETH(feeReceiver, msg.value);
+        if(contractSmart != address(0) && !isExcludedSender[msg.sender]) {
+            ISmart(contractSmart).requestCompensation(user, msg.value);
+        }
 
         if (isInvestment)
-            IValidator(validator).checkBalance(pair, foreignPair[pair], _investAddress(msg.sender));    // on Ethereum network only
+            IValidator(validator).checkBalance(pair, foreignPair[pair], _investAddress(user));    // on Ethereum network only
         else
-            IValidator(validator).checkBalance(pair, foreignPair[pair], _swapAddress(msg.sender));
-        emit CancelRequest(tokenA, tokenB, msg.sender, amount, isInvestment);
+            IValidator(validator).checkBalance(pair, foreignPair[pair], _swapAddress(user));
+        emit CancelRequest(tokenA, tokenB, user, amount, isInvestment);
         return true;
     }
 
@@ -229,15 +340,15 @@ contract SwapFactory is Ownable {
         address payable pair = getPair[tokenA][tokenB];
         require(pair != address(0), 'PAIR_NOT_EXISTS');
         require(amountB != 0, "Zero amount");
-        if (swapAmount[pair][user] == 0) {  // new cancel request
+        if (swapAmount[pair][user] == 0) {  // new claim request
             swapAmount[pair][user] = amountB;
             SwapPair(pair).claim(user, amountB, isInvestment);
         }
-        else { // repeat cancel request in case oracle issues.
+        else { // repeat claim request in case oracle issues.
             amountB = swapAmount[pair][user];
         }
         if (isInvestment)
-            IValidator(validator).checkBalance(pair, foreignPair[pair], _investAddress(msg.sender));    // on BSC network only
+            IValidator(validator).checkBalances(pair, foreignPair[pair], _investAddress(user));    // on BSC network only
         else
             IValidator(validator).checkBalances(pair, foreignPair[pair], user);
         emit ClaimRequest(tokenA, tokenB, user, amountB, isInvestment);

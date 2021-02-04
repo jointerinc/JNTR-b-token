@@ -21,17 +21,19 @@ interface ISwapPair {
     function getTokens() external view returns(address tokenA, address tokenB);
 }
 
-// 1 - BNB, 2 - ETH, 3 - BTC
 interface ICompanyOracle {
-    function getBalance(uint256 network,address token,address user) external returns(uint256);
-    function getPriceAndBalance(address tokenA,address tokenB,uint256 network,address token,address[] calldata user) external returns(uint256);
+    function getBalance(uint256 network, address token, address user) external returns(uint256);
+    function getBalance(uint256 network, address token, address[] calldata user) external returns(uint256);
 }
 
+interface IPrice {
+    function getCurrencyPrice(address _which) external view returns(uint256);   // 1 - BNB, 2 - ETH, 3 - BTC
+}
 
 contract Validator is Ownable {
     using SafeMath for uint256;
 
-    uint256 constant NETWORK = 97;  // ETH mainnet = 1, Ropsten = 3,Kovan - 42, BSC_TESTNET = 97, BSC_MAINNET = 56
+    uint256 constant NETWORK = 1;  // ETH mainnet = 1, Ropsten = 3,Kovan - 42, BSC_TESTNET = 97, BSC_MAINNET = 56
     uint256 constant NOMINATOR = 10**9;     // rate nominator
     address constant NATIVE = address(-1);  // address which holds native token ballance that was spent
     address constant FOREIGN = address(-2); // address which holds foreign token encoded ballance that was spent
@@ -50,6 +52,7 @@ contract Validator is Ownable {
     mapping(address => bool) public isAllowedAddress; 
     uint32 public approves_required = 1;
 
+    address public currencyPrice;   // CurrencyPrice contract return price of selected currency (decimals: 9)
     address public companyOracle;
     mapping (uint256 => uint256) public companyOracleRequests;  // companyOracleRequest ID => requestId
     //mapping (bytes32 => uint256) public provableOracleRequests;  // provableOracleRequests ID => requestId
@@ -65,8 +68,9 @@ contract Validator is Ownable {
         _;
     }
 
-    constructor (address _oracle) public {
+    constructor (address _oracle, address _price) public {
         companyOracle = _oracle;
+        currencyPrice = _price;
         requests.push();    // request ID starts from 1. ID = 0 means completed/empty
     }
 
@@ -77,6 +81,11 @@ contract Validator is Ownable {
 
     function setCompanyOracle(address _addr) external onlyOwner returns(bool) {
         companyOracle = _addr;
+        return true;
+    }
+
+    function setCurrencyPrice(address _addr) external onlyOwner returns(bool) {
+        currencyPrice = _addr;
         return true;
     }
 
@@ -113,27 +122,34 @@ contract Validator is Ownable {
     function checkBalances(address payable pair, address tokenForeign, address user) external onlyAllowed returns(uint256 requestId) {
         requestId = requests.length;
         requests.push(Request(msg.sender, tokenForeign, user, pair));
-        (address tokenA, address tokenB) = ISwapPair(pair).getTokens();
         address[] memory users = new address[](3);
         users[0] = user;
         users[1] = NATIVE;
         users[2] = FOREIGN;
-        uint256 myId = ICompanyOracle(companyOracle).getPriceAndBalance(tokenA, tokenB, NETWORK, tokenForeign, users);
+        uint256 myId = ICompanyOracle(companyOracle).getBalance(NETWORK, tokenForeign, users);
         companyOracleRequests[myId] = requestId;
         //_provable_request(requestId, network, tokenForeign, user);
     }
 
-    function oraclePriceAndBalanceCallback(uint256 requestId,uint256 priceA,uint256 priceB,uint256[] calldata balances) external returns(bool) {
+    function oracleCallback(uint256 requestId, uint256[] calldata balance) external returns(bool) {
         require (companyOracle == msg.sender, "Wrong Oracle");
         uint256 r_id = companyOracleRequests[requestId];
         require(r_id != 0, "Wrong requestId");
         companyOracleRequests[requestId] = 0;   // requestId fulfilled
         Request storage r = requests[r_id];
-        require(priceA != 0 && priceB != 0, "Zero price");
-        uint256 rate = priceB * NOMINATOR / priceA;     // get rate on BSC side: ETH price / BNB price
-        ISwapFactory(r.factory).balancesCallback(r.pair, r.user, balances[0], balances[2], balances[1], rate);
-        emit CompanyOracle3(r_id, balances[0], balances[1], balances[2]);
+        uint256 rate = getRate(r.pair);
+        ISwapFactory(r.factory).balancesCallback(r.pair, r.user, balance[0], balance[2], balance[1], rate);
+        emit CompanyOracle3(r_id, balance[0], balance[1], balance[2]);
         return true;
+    }
+
+    // get rate on BSC side: ETH price / BNB price
+    function getRate(address payable pair) internal view returns(uint256 rate) {
+        (address tokenA, address tokenB) = ISwapPair(pair).getTokens();
+        uint256 priceA = IPrice(currencyPrice).getCurrencyPrice(tokenA);   //native token
+        uint256 priceB = IPrice(currencyPrice).getCurrencyPrice(tokenB);   //foreign token
+        require(priceA != 0 && priceB != 0, "Zero price");
+        rate = priceB * NOMINATOR / priceA;
     }
 
     function withdraw(uint256 amount) external onlyAllowed returns (bool) {
@@ -154,4 +170,5 @@ contract Validator is Ownable {
     }
 
     receive() external payable {}
+
 }
