@@ -3,7 +3,7 @@
 ### Create staking
 https://github.com/jointerinc/JNTR-b-token/blob/fa5f736cd3c41475b777f20ef84b970a4b22dbd5/contracts/Staking.sol#L195-L198
 
-### Withdraw tokend + reward from staking
+### Withdraw tokens + reward from staking
 https://github.com/jointerinc/JNTR-b-token/blob/fa5f736cd3c41475b777f20ef84b970a4b22dbd5/contracts/Staking.sol#L211-L212
 
 ### Withdraw tokens from staking without reward 
