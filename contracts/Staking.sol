@@ -113,23 +113,28 @@ contract Staking is Ownable {
         return a - b;
     }
 
+    // returns amount of tokens in reward pool
     function getRewardsPool() public view returns(uint256 rewardsPool) {
         return safeSub(token.balanceOf(address(this)),totalStakingAmount);
     }
 
+    // returns number of available options
     function getNumberOptions() external view returns(uint256 number) {
         return options.length;
     }
 
+    // returns all options
     function getOptions() external view returns(Option[] memory) {
         return options;
     }
 
+    // returns selected option
     function getOption(uint256 id) external view returns(Option memory option) {
         return options[id];
     }
 
 
+    // Create new staking option (staking rule).
     // period - in seconds
     // rate - percent per year with 18 decimals
     function addOption(uint128 period, uint128 rate) external onlyOwner returns(bool) {
@@ -139,6 +144,7 @@ contract Staking is Ownable {
         return true;
     }
 
+    // Change existing stakin option (rule).
     // period - in seconds
     // rate - percent per year with 18 decimals
     // id - id of option to change
@@ -149,6 +155,7 @@ contract Staking is Ownable {
         return true;
     }
 
+    // Remove staking option
     // id - id of option to remove
     function removeOption(uint256 id) external onlyOwner returns(bool) {
         uint256 last = options.length - 1;
@@ -163,24 +170,31 @@ contract Staking is Ownable {
         return true;
     }
 
+    // returns number of staking by user
     function getNumberOrders(address user) external view returns(uint256 number) {
         return stakingOrders[user].length;
     }
 
+    // returns staking orders by user
     function getOrders(address user) external view returns(Order[] memory order) {
         return stakingOrders[user];
     }
 
+    // returns selected staking order by user
     function getOrder(address user, uint256 id) external view returns(Order memory order) {
         return stakingOrders[user][id];
     }
 
+    // returns amount of reward earned by user in selected staking order
     //user - address of user wallet
     //id - order id of user
     function calculateReward(address user, uint256 id) external view returns(uint256 reward) {
         (reward, ) = _calculateReward(user, id);
     }
 
+    // Create new staking by user with selected option
+    // optionId - staking option ID
+    // amount - amount of tokens that user wants to stake
     function createOrder(uint256 optionId, uint256 amount) external returns(bool) {
         require(optionId < options.length, "Wrong option ID");
         require(amount > 0, "Amount can't be zero");
@@ -194,6 +208,7 @@ contract Staking is Ownable {
         return true;
     }
 
+    // withdraw staking amount + rewards for selected order by user 
     function withdraw(uint256 id) external returns(bool) {
         (uint256 reward, bool complete) = _calculateReward(msg.sender, id);
         require(complete, "Staking not complete");
@@ -220,6 +235,9 @@ contract Staking is Ownable {
         return true;
     }
 
+    // user may change staking option to another with longer staking period
+    // id - staking order id that user wants to upgrade
+    // optionId - new option than user wants to use for his staking order
     function upgradeOrder(uint256 id, uint256 optionId) external returns(bool) {
         (uint256 reward, bool complete) = _calculateReward(msg.sender, id);
         require(!complete, "Staking complete");
@@ -237,6 +255,9 @@ contract Staking is Ownable {
         return true;
     }
 
+    // user can add more tokens to existing staking order
+    // id - staking order where user wants to add token
+    // amount - amount of tokens user wants to add
     function addToOrder(uint256 id, uint256 amount) external returns(bool) {
         (uint256 reward, bool complete) = _calculateReward(msg.sender, id);
         require(!complete, "Staking complete");
